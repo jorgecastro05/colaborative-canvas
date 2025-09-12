@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Collaborative Canvas</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #333;
+      color: #fff;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      margin-top: 0;
+    }
+    #instructions {
+      background-color: #444;
+      padding: 15px;
+      border-radius: 8px;
+      max-width: 800px;
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    #instructions p {
+      margin: 5px 0;
+    }
+    #file-upload-label {
+      display: inline-block;
+      padding: 10px 20px;
+      background-color: #007bff;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-bottom: 20px;
+    }
+    #file-upload-label:hover {
+      background-color: #0056b3;
+    }
+    input[type="file"] {
+      display: none;
+    }
+    canvas {
+      border: 2px solid #555;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <h1>Collaborative Canvas</h1>
+  <div id="instructions">
+    <p><b>✔️ Upload:</b> Use the button below or copy & paste an image directly onto the page.</p>
+    <p><b>✔️ Collaborate:</b> Changes are synced with everyone viewing this page!</p>
+    <p><b>✔️ Move:</b> Click and drag an image to move it around (even outside the canvas).</p>
+    <p><b>✔️ Resize:</b> Select an image by clicking on it, then drag the blue corner handles (keeps aspect ratio).</p>
+    <p><b>✔️ Delete:</b> Select an image and press the 'Delete' or 'Backspace' key.</p>
+  </div>
+
+  <label for="file-upload" id="file-upload-label">Upload Image</label>
+  <input type="file" id="file-upload" accept="image/*">
+
+  <canvas id="myCanvas"></canvas>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const canvas = document.getElementById('myCanvas');
+    const ctx = canvas.getContext('2d');
+    const fileInput = document.getElementById('file-upload');
+
+    canvas.width = 800;
+    canvas.height = 600;
+
+    const HANDLE_SIZE = 10;
+    const HANDLE_COLOR = '#007bff';
+    const BORDER_COLOR = '#007bff';
+
+    let imagesData = [];
+    let loadedImages = {};
+    let selectedImageIndex = -1;
+    let isDragging = false;
+    let isResizing = false;
+    let resizeHandle = null;
+    let dragStartX, dragStartY;
+
+    const socket = io();
+
+    function adjustCanvasSize() {
+      if (imagesData.length === 0) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      imagesData.forEach(img => {
+        minX = Math.min(minX, img.x);
+        minY = Math.min(minY, img.y);
+        maxX = Math.max(maxX, img.x + img.width);
+        maxY = Math.max(maxY, img.y + img.height);
+      });
+      canvas.width = Math.max(800, maxX - minX + 50);
+      canvas.height = Math.max(600, maxY - minY + 50);
+    }
+
+    function draw() {
+      adjustCanvasSize();
+      ctx.fillStyle = 'green';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      imagesData.forEach(imgData => {
+        const img = loadedImages[imgData.src];
+        if (img && img.complete) {
+          ctx.drawImage(img, imgData.x, imgData.y, imgData.width, imgData.height);
+        }
+      });
+
+      if (selectedImageIndex !== -1) {
+        const imgData = imagesData[selectedImageIndex];
+        ctx.strokeStyle = BORDER_COLOR;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(imgData.x, imgData.y, imgData.width, imgData.height);
+        ctx.fillStyle = HANDLE_COLOR;
+        ctx.fillRect(imgData.x - HANDLE_SIZE / 2, imgData.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+        ctx.fillRect(imgData.x + imgData.width - HANDLE_SIZE / 2, imgData.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+        ctx.fillRect(imgData.x - HANDLE_SIZE / 2, imgData.y + imgData.height - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+        ctx.fillRect(imgData.x + imgData.width - HANDLE_SIZE / 2, imgData.y + imgData.height - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+      }
+    }
+
+    function loadImage(data, callback) {
+      if (loadedImages[data.src]) {
+        if (callback) callback();
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        loadedImages[data.src] = img;
+        if (callback) callback();
+      };
+      img.src = data.src;
+    }
+
+    socket.on('initial-canvas-state', (initialState) => {
+      imagesData = initialState;
+      let loadedCount = 0;
+      if (imagesData.length === 0) { draw(); return; }
+      imagesData.forEach(imgData => {
+        loadImage(imgData, () => {
+          loadedCount++;
+          if (loadedCount === imagesData.length) draw();
+        });
+      });
+    });
+
+    socket.on('image-added', (newImageData) => {
+      imagesData.push(newImageData);
+      loadImage(newImageData, draw);
+    });
+
+    socket.on('canvas-updated', (newState) => {
+      imagesData = newState;
+      let loadedCount = 0;
+      if (imagesData.length === 0) { draw(); return; }
+      imagesData.forEach(imgData => {
+        loadImage(imgData, () => {
+          loadedCount++;
+          if (loadedCount === imagesData.length) draw();
+        });
+      });
+    });
+
+    function addImage(file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const newImageData = {
+            src: e.target.result,
+            x: canvas.width / 2 - img.width / 4,
+            y: canvas.height / 2 - img.height / 4,
+            width: img.width / 2,
+            height: img.height / 2,
+            aspect: img.width / img.height
+          };
+          socket.emit('add-image', newImageData);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) addImage(e.target.files[0]);
+    });
+
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          addImage(items[i].getAsFile());
+          break;
+        }
+      }
+    });
+
+    function getMousePos(e) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
+    function getHandleAt(pos, imgData) {
+      const halfHandle = HANDLE_SIZE / 2;
+      if (pos.x >= imgData.x - halfHandle && pos.x <= imgData.x + halfHandle && pos.y >= imgData.y - halfHandle && pos.y <= imgData.y + halfHandle) return 'tl';
+      if (pos.x >= imgData.x + imgData.width - halfHandle && pos.x <= imgData.x + imgData.width + halfHandle && pos.y >= imgData.y - halfHandle && pos.y <= imgData.y + halfHandle) return 'tr';
+      if (pos.x >= imgData.x - halfHandle && pos.x <= imgData.x + halfHandle && pos.y >= imgData.y + imgData.height - halfHandle && pos.y <= imgData.y + imgData.height + halfHandle) return 'bl';
+      if (pos.x >= imgData.x + imgData.width - halfHandle && pos.x <= imgData.x + imgData.width + halfHandle && pos.y >= imgData.y + imgData.height - halfHandle && pos.y <= imgData.y + imgData.height + halfHandle) return 'br';
+      return null;
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      const pos = getMousePos(e);
+      let clickedOnImage = false;
+
+      if (selectedImageIndex !== -1) {
+        const selectedImg = imagesData[selectedImageIndex];
+        resizeHandle = getHandleAt(pos, selectedImg);
+        if (resizeHandle) {
+          isResizing = true;
+          clickedOnImage = true;
+        }
+      }
+
+      if (!isResizing) {
+        for (let i = imagesData.length - 1; i >= 0; i--) {
+          const imgData = imagesData[i];
+          if (pos.x >= imgData.x && pos.x <= imgData.x + imgData.width && pos.y >= imgData.y && pos.y <= imgData.y + imgData.height) {
+            selectedImageIndex = i;
+            isDragging = true;
+            clickedOnImage = true;
+            dragStartX = pos.x - imgData.x;
+            dragStartY = pos.y - imgData.y;
+            break;
+          }
+        }
+      }
+
+      if (!clickedOnImage) selectedImageIndex = -1;
+      draw();
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDragging && !isResizing) return;
+      if (selectedImageIndex === -1) return;
+
+      const pos = getMousePos(e);
+      const imgData = imagesData[selectedImageIndex];
+
+      if (isDragging) {
+        imgData.x = pos.x - dragStartX;
+        imgData.y = pos.y - dragStartY;
+      } else if (isResizing) {
+        let newW, newH;
+        const aspect = imgData.aspect;
+        switch (resizeHandle) {
+          case 'tl':
+            newW = imgData.width + (imgData.x - pos.x);
+            newH = newW / aspect;
+            imgData.x = pos.x; imgData.y = imgData.y + imgData.height - newH;
+            imgData.width = newW; imgData.height = newH; break;
+          case 'tr':
+            newW = pos.x - imgData.x;
+            newH = newW / aspect;
+            imgData.y = imgData.y + imgData.height - newH;
+            imgData.width = newW; imgData.height = newH; break;
+          case 'bl':
+            newW = imgData.width + (imgData.x - pos.x);
+            newH = newW / aspect;
+            imgData.x = pos.x;
+            imgData.width = newW; imgData.height = newH; break;
+          case 'br':
+            newW = pos.x - imgData.x;
+            newH = newW / aspect;
+            imgData.width = newW; imgData.height = newH; break;
+        }
+      }
+      draw();
+      socket.emit('update-canvas', imagesData);
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      if (isDragging || isResizing) socket.emit('update-canvas', imagesData);
+      isDragging = false;
+      isResizing = false;
+      resizeHandle = null;
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedImageIndex !== -1) {
+        socket.emit('delete-image', selectedImageIndex);
+        selectedImageIndex = -1;
+      }
+    });
+  </script>
+</body>
+</html>

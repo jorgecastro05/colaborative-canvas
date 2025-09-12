@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Viewer</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #333;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    canvas {
+      border: 2px solid #555;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="myCanvas"></canvas>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const canvas = document.getElementById('myCanvas');
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = 800;
+    canvas.height = 600;
+
+    let imagesData = [];
+    let loadedImages = {};
+
+    const socket = io();
+
+    function draw() {
+      ctx.fillStyle = 'green';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      imagesData.forEach(imgData => {
+        const img = loadedImages[imgData.src];
+        if (img && img.complete) {
+          ctx.drawImage(img, imgData.x, imgData.y, imgData.width, imgData.height);
+        }
+      });
+    }
+
+    function loadImage(data, callback) {
+      if (loadedImages[data.src]) {
+        if (callback) callback();
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        loadedImages[data.src] = img;
+        if (callback) callback();
+      };
+      img.src = data.src;
+    }
+
+    socket.on('initial-canvas-state', (initialState) => {
+      imagesData = initialState;
+      let loadedCount = 0;
+      if (imagesData.length === 0) { draw(); return; }
+      imagesData.forEach(imgData => {
+        loadImage(imgData, () => {
+          loadedCount++;
+          if (loadedCount === imagesData.length) draw();
+        });
+      });
+    });
+
+    socket.on('image-added', (newImageData) => {
+      imagesData.push(newImageData);
+      loadImage(newImageData, draw);
+    });
+
+    socket.on('canvas-updated', (newState) => {
+      imagesData = newState;
+      let loadedCount = 0;
+      if (imagesData.length === 0) { draw(); return; }
+      imagesData.forEach(imgData => {
+        loadImage(imgData, () => {
+          loadedCount++;
+          if (loadedCount === imagesData.length) draw();
+        });
+      });
+    });
+  </script>
+</body>
+</html>
