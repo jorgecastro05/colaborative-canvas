@@ -5,7 +5,7 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const io = const io = new Server(server, {
+const io = new Server(server, {
   maxHttpBufferSize: 5 * 1024 * 1024 // 5 MiB
 });
 
